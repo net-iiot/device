@@ -196,10 +196,8 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
         // Quando ambos recebidos, salva no NVS e fecha conexão
         EventBits_t bits = xEventGroupGetBits(s_events);
         if ((bits & EVT_ALL_RCVD) == EVT_ALL_RCVD && s_conn_id != 0xFFFF) {
-            std::string machine(s_machine_val, s_machine_val_len);
-            ESP_LOGI(TAG, "Config completa — salvando NVS: machine='%s' type=%u",
-                     machine.c_str(), s_alert_type);
-            Storage::save_config(machine, s_alert_type);
+            ESP_LOGI(TAG, "Config completa — machine='%s' type=%u",
+                     s_machine_val, s_alert_type);
             esp_ble_gatts_close(gatts_if, s_conn_id);
         }
         break;
