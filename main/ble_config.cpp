@@ -75,6 +75,7 @@ static uint16_t s_gatts_if  = ESP_GATT_IF_NONE;
 static uint16_t s_conn_id   = 0xFFFF;
 
 static BleConfig::ConfigCallback s_callback;
+static std::function<bool()> s_should_stop;
 
 // Advertising
 static esp_ble_adv_params_t s_adv_params;
@@ -208,9 +209,10 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
     }
 }
 
-void BleConfig::start(ConfigCallback cb, uint32_t timeout_ms)
+void BleConfig::start(ConfigCallback cb, uint32_t timeout_ms, std::function<bool()> should_stop)
 {
     s_callback = cb;
+    s_should_stop = should_stop;
     s_events   = xEventGroupCreate();
     init_adv_params();
 
@@ -259,8 +261,25 @@ void BleConfig::start(ConfigCallback cb, uint32_t timeout_ms)
 
     ESP_LOGI(TAG, "Aguardando config BLE (timeout=%lus)...", (unsigned long)(timeout_ms / 1000));
 
-    EventBits_t bits = xEventGroupWaitBits(
-        s_events, EVT_ALL_RCVD, pdFALSE, pdTRUE, pdMS_TO_TICKS(timeout_ms));
+    // Polling curto — verifica a cada 500ms se config chegou ou se deve parar
+    uint32_t elapsed = 0;
+    const uint32_t poll_ms = 500;
+    EventBits_t bits = 0;
+
+    while (elapsed < timeout_ms) {
+        bits = xEventGroupWaitBits(
+            s_events, EVT_ALL_RCVD, pdFALSE, pdTRUE, pdMS_TO_TICKS(poll_ms));
+
+        if ((bits & EVT_ALL_RCVD) == EVT_ALL_RCVD) break;
+
+        // Verifica callback de cancelamento (jumper removido, etc.)
+        if (s_should_stop && s_should_stop()) {
+            ESP_LOGI(TAG, "Cancelamento externo — encerrando BLE config");
+            break;
+        }
+
+        elapsed += poll_ms;
+    }
 
     if ((bits & EVT_ALL_RCVD) == EVT_ALL_RCVD) {
         ESP_LOGI(TAG, "Configuração salva com sucesso");
@@ -269,7 +288,7 @@ void BleConfig::start(ConfigCallback cb, uint32_t timeout_ms)
             s_callback({m, s_alert_type});
         }
     } else {
-        ESP_LOGW(TAG, "Timeout — nenhuma configuração recebida");
+        ESP_LOGW(TAG, "Config encerrada sem receber dados");
     }
 
     esp_ble_gap_stop_advertising();

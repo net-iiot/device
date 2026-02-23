@@ -29,5 +29,5 @@ namespace BleConfig
     // Bloqueia por até timeout_ms ms aguardando dados do app.
     // Chama cb quando ambos os campos forem recebidos.
     // Desliga BLE ao sair.
-    void start(ConfigCallback cb, uint32_t timeout_ms = 30'000);
+    void start(ConfigCallback cb, uint32_t timeout_ms = 30'000, std::function<bool()> should_stop = nullptr);
 }

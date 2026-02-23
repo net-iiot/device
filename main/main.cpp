@@ -50,17 +50,15 @@ extern "C" void app_main(void)
         ESP_LOGI(TAG, "═══════════════════════════════════════════════════════");
 
         while (is_config_jumper_active()) {
-            BleConfig::start([](BleConfig::ConfigData data) {
-                Storage::save_config(data.machine_id, data.alert_type);
-                ESP_LOGI("MAIN", "Config salva: machine=%s alert_type=%d",
-                         data.machine_id.c_str(), data.alert_type);
-            }, 30'000);
-
-            // Após timeout ou config recebida, verifica se jumper ainda ativo
-            if (is_config_jumper_active()) {
-                ESP_LOGI(TAG, "Jumper ainda ativo — reiniciando BLE config...");
-                vTaskDelay(pdMS_TO_TICKS(1000));
-            }
+            BleConfig::start(
+                [](BleConfig::ConfigData data) {
+                    Storage::save_config(data.machine_id, data.alert_type);
+                    ESP_LOGI("MAIN", "Config salva: machine=%s alert_type=%d",
+                             data.machine_id.c_str(), data.alert_type);
+                },
+                60'000,  // timeout generoso — jumper controla a saída
+                []() -> bool { return !is_config_jumper_active(); }  // sai quando jumper removido
+            );
         }
 
         ESP_LOGI(TAG, "Jumper removido — saindo do modo configuração");
