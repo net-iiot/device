@@ -9,36 +9,43 @@
 static const char *TAG = "BTN";
 
 // ─── Constantes de temporização ─────────────────────────────────────────────
-static constexpr int64_t DETECTION_WINDOW_US  = 6'000'000; // 6s janela total
-static constexpr int64_t CLICK_MAX_US         =   800'000; // <800ms = clique
-static constexpr int64_t HOLD_MIN_US          = 3'000'000; // ≥3s = segurou
-static constexpr int64_t INTER_CLICK_TIMEOUT_US = 1'200'000; // 1.2s sem atividade encerra sequência
-static constexpr int      CLICK_TARGET        = 5;
+static constexpr int64_t DETECTION_WINDOW_US    = 10'000'000; // 10s janela total
+static constexpr int64_t CLICK_MAX_US           =   600'000;  // <600ms = clique
+static constexpr int64_t HOLD_MIN_US            = 3'000'000;  // ≥3s = segurou
+static constexpr int64_t CONFIG_TIMEOUT_US      = 4'000'000;  // 4s pra completar 5 cliques
+static constexpr int     CLICK_TARGET           = 5;
 
 // ─── Evento de botão (ISR → task) ───────────────────────────────────────────
 struct BtnEvent
 {
-    bool    pressed;  // true = borda de descida, false = borda de subida
-    int64_t ts_us;    // esp_timer_get_time() no momento do evento
+    bool    pressed;
+    int64_t ts_us;
 };
 
 static gpio_num_t    s_pin;
 static QueueHandle_t s_queue;
 
-// ─── ISR (IRAM) ──────────────────────────────────────────────────────────────
+// ─── ISR (IRAM) com debounce ────────────────────────────────────────────────
+static constexpr int64_t DEBOUNCE_US = 50'000; // 50ms
+static int64_t s_last_isr_us = 0;
+
 static void IRAM_ATTR isr_handler(void *)
 {
+    int64_t now = esp_timer_get_time();
+    if ((now - s_last_isr_us) < DEBOUNCE_US) return;
+    s_last_isr_us = now;
+
     BtnEvent ev;
     ev.pressed = (gpio_get_level(s_pin) == 0);
-    ev.ts_us   = esp_timer_get_time();
+    ev.ts_us   = now;
     xQueueSendFromISR(s_queue, &ev, nullptr);
 }
 
-// ─── API pública ─────────────────────────────────────────────────────────────
+// ─── API pública ────────────────────────────────────────────────────────────
 void Button::init(gpio_num_t pin)
 {
     s_pin   = pin;
-    s_queue = xQueueCreate(16, sizeof(BtnEvent));
+    s_queue = xQueueCreate(32, sizeof(BtnEvent));
 
     gpio_config_t cfg = {};
     cfg.pin_bit_mask = (1ULL << pin);
@@ -51,8 +58,7 @@ void Button::init(gpio_num_t pin)
     gpio_install_isr_service(0);
     gpio_isr_handler_add(pin, isr_handler, nullptr);
 
-    // Se o botão já está pressionado quando acordamos (deep sleep wakeup),
-    // injeta um evento PRESS sintético para não perder o início do hold.
+    // Se o botão já está pressionado ao acordar, injeta PRESS sintético
     if (gpio_get_level(pin) == 0) {
         BtnEvent ev = {true, esp_timer_get_time()};
         xQueueSend(s_queue, &ev, 0);
@@ -62,83 +68,76 @@ void Button::init(gpio_num_t pin)
 Button::Result Button::detect()
 {
     int64_t window_start  = esp_timer_get_time();
-    int64_t last_event_us = window_start;
-    int64_t press_start   = -1;   // -1 = botão solto
+    int64_t first_click_us = 0;  // timestamp do primeiro clique (pra timeout de config)
+    int64_t press_start   = -1;
     int     click_count   = 0;
     bool    button_held   = false;
 
     BtnEvent ev;
 
     while (true) {
-        int64_t now           = esp_timer_get_time();
-        int64_t window_ms     = (now - window_start)  / 1000;
-        int64_t inactivity_ms = (now - last_event_us) / 1000;
+        int64_t now       = esp_timer_get_time();
+        int64_t window_ms = (now - window_start) / 1000;
 
         // Encerra janela por timeout total
         if (window_ms >= DETECTION_WINDOW_US / 1000) break;
 
-        // Encerra por inatividade após pelo menos 1 clique registrado
-        if (click_count > 0 && inactivity_ms >= INTER_CLICK_TIMEOUT_US / 1000) break;
+        // Se já tem cliques mas não atingiu 5, verifica timeout de config
+        // Após CONFIG_TIMEOUT_US do primeiro clique sem atingir 5, desiste de config
+        if (click_count > 0 && click_count < CLICK_TARGET && !button_held && first_click_us > 0) {
+            int64_t since_first = (now - first_click_us) / 1000;
+            if (since_first >= CONFIG_TIMEOUT_US / 1000) {
+                ESP_LOGI(TAG, "Timeout config: %d cliques em %lld ms — tratando como alerta",
+                         click_count, since_first);
+                return Result::HOLD_3S;
+            }
+        }
 
         // Aguarda próximo evento ISR (polling a cada 50ms)
         if (xQueueReceive(s_queue, &ev, pdMS_TO_TICKS(50)) == pdTRUE) {
-            last_event_us = ev.ts_us;
-
             if (ev.pressed && !button_held) {
-                // Borda de descida: início de pressão
                 button_held = true;
                 press_start = ev.ts_us;
 
             } else if (!ev.pressed && button_held) {
-                // Borda de subida: botão liberado
                 button_held = false;
                 int64_t hold_us = ev.ts_us - press_start;
                 press_start = -1;
 
                 if (hold_us < CLICK_MAX_US) {
-                    // Clique curto
                     click_count++;
+                    if (first_click_us == 0) first_click_us = ev.ts_us;
                     ESP_LOGI(TAG, "Clique %d", click_count);
                     if (click_count >= CLICK_TARGET) {
+                        ESP_LOGI(TAG, "5 cliques — modo configuração");
                         return Result::FIVE_CLICKS;
                     }
                 }
-                // Pressões intermediárias (800ms–3s) são ignoradas intencionalmente
+                // Pressão >= 600ms mas < 3s soltou: conta como intenção de alerta
+                else if (hold_us >= CLICK_MAX_US) {
+                    ESP_LOGI(TAG, "Pressão longa (%lld ms) — tratando como alerta", hold_us / 1000);
+                    return Result::HOLD_3S;
+                }
             }
         }
 
-        // Verifica hold ativo ≥ 3s enquanto botão está pressionado
+        // Hold ≥ 3s = alerta imediato (não espera soltar)
         if (button_held && press_start >= 0) {
             int64_t held_us = esp_timer_get_time() - press_start;
             if (held_us >= HOLD_MIN_US) {
-                ESP_LOGI(TAG, "Hold 3s detectado — aguardando soltar...");
-
-                // Espera o botão ser solto
-                while (gpio_get_level(s_pin) == 0) {
-                    vTaskDelay(pdMS_TO_TICKS(10));
-                }
-                button_held = false;
-
-                // Aguarda 500ms para garantir que não há clique adicional
-                bool extra = false;
-                BtnEvent extra_ev;
-                if (xQueueReceive(s_queue, &extra_ev, pdMS_TO_TICKS(500)) == pdTRUE) {
-                    if (extra_ev.pressed) extra = true;
-                }
-
-                if (!extra) {
-                    return Result::HOLD_3S;
-                }
-
-                // Havia outro clique — não é hold de segurança, conta como clique
-                click_count++;
-                press_start = -1;
-                last_event_us = esp_timer_get_time();
-                ESP_LOGI(TAG, "Hold cancelado por clique extra. Cliques: %d", click_count);
+                ESP_LOGI(TAG, "Hold 3s detectado — disparando alerta");
+                while (xQueueReceive(s_queue, &ev, 0) == pdTRUE) {}
+                return Result::HOLD_3S;
             }
         }
     }
 
-    ESP_LOGI(TAG, "Janela encerrada: %d clique(s)", click_count);
+    // Janela encerrou — se teve qualquer interação, trata como alerta
+    if (click_count > 0) {
+        ESP_LOGI(TAG, "Janela encerrada com %d clique(s) — tratando como alerta", click_count);
+        return Result::HOLD_3S;
+    }
+
+    ESP_LOGI(TAG, "Janela encerrada sem interação — sem ação");
     return Result::NONE;
 }
