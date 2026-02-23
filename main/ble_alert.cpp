@@ -162,6 +162,17 @@ bool BleAlert::send(const AlertData &data, uint32_t timeout_ms)
 {
     s_events = xEventGroupCreate();
 
+    if (data.alert_type == 0) {
+        ESP_LOGE(TAG, "alert_type não configurado (0)");
+        vEventGroupDelete(s_events);
+        s_events = nullptr;
+        return false;
+    }
+
+    if (data.machine_id.length() > 15) {
+        ESP_LOGW(TAG, "machine_id truncado de %d para 15 chars", (int)data.machine_id.length());
+    }
+
     // Monta pacote
     memset(&s_packet, 0, sizeof(s_packet));
     s_packet.version     = 1;
