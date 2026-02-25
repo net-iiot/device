@@ -11,7 +11,7 @@
 
 static const char *TAG = "ALERT";
 
-static void wait_button_release(gpio_num_t pin)
+static void config_gpio_input(gpio_num_t pin)
 {
     gpio_config_t cfg = {};
     cfg.pin_bit_mask = (1ULL << pin);
@@ -20,7 +20,11 @@ static void wait_button_release(gpio_num_t pin)
     cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
     cfg.intr_type    = GPIO_INTR_DISABLE;
     gpio_config(&cfg);
+}
 
+static void wait_button_release(gpio_num_t pin)
+{
+    config_gpio_input(pin);
     while (gpio_get_level(pin) == 0) {
         vTaskDelay(pdMS_TO_TICKS(50));
     }
@@ -43,7 +47,21 @@ AlertRunner::Result AlertRunner::run(gpio_num_t btn_pin)
         return Result::Sleep;
     }
 
-    wait_button_release(btn_pin);
+    config_gpio_input(btn_pin);
+    vTaskDelay(pdMS_TO_TICKS(150));
+
+    if (gpio_get_level(btn_pin) == 0) {
+        ESP_LOGI(TAG, ">> DISPARO DE ALERTA <<");
+        BleAlert::AlertData alert = {
+            .machine_id = Storage::get_machine_id(),
+            .alert_type = Storage::get_alert_type(),
+        };
+        bool ok = BleAlert::send(alert);
+        ESP_LOGI(TAG, "Alerta %s", ok ? "enviado" : "FALHOU");
+        wait_button_release(btn_pin);
+        Sys::go_deep_sleep(btn_pin);
+        return Result::Sleep;
+    }
 
     Button::init(btn_pin);
     Button::Result r = Button::detect();
