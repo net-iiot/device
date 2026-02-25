@@ -8,14 +8,12 @@
 
 static const char *TAG = "BTN";
 
-// ─── Constantes de temporização ─────────────────────────────────────────────
-static constexpr int64_t DETECTION_WINDOW_US    = 10'000'000; // 10s janela total
-static constexpr int64_t CLICK_MAX_US           =   600'000;  // <600ms = clique
-static constexpr int64_t HOLD_MIN_US            = 3'000'000;  // ≥3s = segurou
-static constexpr int64_t CONFIG_TIMEOUT_US      = 4'000'000;  // 4s pra completar 5 cliques
+static constexpr int64_t DETECTION_WINDOW_US    = 10'000'000;
+static constexpr int64_t CLICK_MAX_US           =   600'000;
+static constexpr int64_t HOLD_MIN_US            = 3'000'000;
+static constexpr int64_t CONFIG_TIMEOUT_US      = 4'000'000;
 static constexpr int     CLICK_TARGET           = 5;
 
-// ─── Evento de botão (ISR → task) ───────────────────────────────────────────
 struct BtnEvent
 {
     bool    pressed;
@@ -25,8 +23,7 @@ struct BtnEvent
 static gpio_num_t    s_pin;
 static QueueHandle_t s_queue;
 
-// ─── ISR (IRAM) com debounce ────────────────────────────────────────────────
-static constexpr int64_t DEBOUNCE_US = 50'000; // 50ms
+static constexpr int64_t DEBOUNCE_US = 50'000;
 static int64_t s_last_isr_us = 0;
 
 static void IRAM_ATTR isr_handler(void *)
@@ -41,7 +38,6 @@ static void IRAM_ATTR isr_handler(void *)
     xQueueSendFromISR(s_queue, &ev, nullptr);
 }
 
-// ─── API pública ────────────────────────────────────────────────────────────
 void Button::init(gpio_num_t pin)
 {
     s_pin   = pin;
@@ -58,7 +54,6 @@ void Button::init(gpio_num_t pin)
     gpio_install_isr_service(0);
     gpio_isr_handler_add(pin, isr_handler, nullptr);
 
-    // Se o botão já está pressionado ao acordar, injeta PRESS sintético
     if (gpio_get_level(pin) == 0) {
         BtnEvent ev = {true, esp_timer_get_time()};
         xQueueSend(s_queue, &ev, 0);
@@ -68,7 +63,7 @@ void Button::init(gpio_num_t pin)
 Button::Result Button::detect()
 {
     int64_t window_start  = esp_timer_get_time();
-    int64_t first_click_us = 0;  // timestamp do primeiro clique (pra timeout de config)
+    int64_t first_click_us = 0;
     int64_t press_start   = -1;
     int     click_count   = 0;
     bool    button_held   = false;
@@ -79,11 +74,8 @@ Button::Result Button::detect()
         int64_t now       = esp_timer_get_time();
         int64_t window_ms = (now - window_start) / 1000;
 
-        // Encerra janela por timeout total
         if (window_ms >= DETECTION_WINDOW_US / 1000) break;
 
-        // Se já tem cliques mas não atingiu 5, verifica timeout de config
-        // Após CONFIG_TIMEOUT_US do primeiro clique sem atingir 5, desiste de config
         if (click_count > 0 && click_count < CLICK_TARGET && !button_held && first_click_us > 0) {
             int64_t since_first = (now - first_click_us) / 1000;
             if (since_first >= CONFIG_TIMEOUT_US / 1000) {
@@ -93,7 +85,6 @@ Button::Result Button::detect()
             }
         }
 
-        // Aguarda próximo evento ISR (polling a cada 50ms)
         if (xQueueReceive(s_queue, &ev, pdMS_TO_TICKS(50)) == pdTRUE) {
             if (ev.pressed && !button_held) {
                 button_held = true;
@@ -113,7 +104,6 @@ Button::Result Button::detect()
                         return Result::FIVE_CLICKS;
                     }
                 }
-                // Pressão >= 600ms mas < 3s soltou: conta como intenção de alerta
                 else if (hold_us >= CLICK_MAX_US) {
                     ESP_LOGI(TAG, "Pressão longa (%lld ms) — tratando como alerta", hold_us / 1000);
                     return Result::HOLD_3S;
@@ -121,7 +111,6 @@ Button::Result Button::detect()
             }
         }
 
-        // Hold ≥ 3s = alerta imediato (não espera soltar)
         if (button_held && press_start >= 0) {
             int64_t held_us = esp_timer_get_time() - press_start;
             if (held_us >= HOLD_MIN_US) {
@@ -132,7 +121,6 @@ Button::Result Button::detect()
         }
     }
 
-    // Janela encerrou — se teve qualquer interação, trata como alerta
     if (click_count > 0) {
         ESP_LOGI(TAG, "Janela encerrada com %d clique(s) — tratando como alerta", click_count);
         return Result::HOLD_3S;

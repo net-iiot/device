@@ -12,7 +12,6 @@
 
 static const char *TAG = "BLE_CFG";
 
-// UUIDs em little-endian (ESP-IDF exige LSB primeiro)
 static const uint8_t CFG_SVC_UUID[16]      = {0x60,0x50,0x40,0x30,0x20,0x10,0x99,0x88,0xDD,0xCC,0xBB,0xAA,0x10,0x00,0x4D,0x57};
 static const uint8_t MACHINE_CHAR_UUID[16] = {0x60,0x50,0x40,0x30,0x20,0x10,0x99,0x88,0xDD,0xCC,0xBB,0xAA,0x11,0x00,0x4D,0x57};
 static const uint8_t TYPE_CHAR_UUID[16]    = {0x60,0x50,0x40,0x30,0x20,0x10,0x99,0x88,0xDD,0xCC,0xBB,0xAA,0x12,0x00,0x4D,0x57};
@@ -30,7 +29,6 @@ static const uint16_t PRIMARY_SVC_UUID  = ESP_GATT_UUID_PRI_SERVICE;
 static const uint16_t CHAR_DECLARE_UUID = ESP_GATT_UUID_CHAR_DECLARE;
 static const uint8_t  PROP_RW          = ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE;
 
-// Valores atuais (carregados do NVS)
 static char    s_machine_val[32] = {};
 static uint16_t s_machine_val_len = 0;
 static uint8_t  s_alert_type = 0;
@@ -46,7 +44,6 @@ static const esp_gatts_attr_db_t s_attr_table[IDX_COUNT] = {
         {ESP_UUID_LEN_16, (uint8_t *)&CHAR_DECLARE_UUID, ESP_GATT_PERM_READ,
          sizeof(PROP_RW), sizeof(PROP_RW), (uint8_t *)&PROP_RW}},
 
-    // RSP_BY_APP: controle manual de read/write
     [IDX_MACHINE_VAL] = {
         {ESP_GATT_RSP_BY_APP},
         {ESP_UUID_LEN_128, (uint8_t *)MACHINE_CHAR_UUID,
@@ -77,7 +74,6 @@ static uint16_t s_conn_id   = 0xFFFF;
 static BleConfig::ConfigCallback s_callback;
 static std::function<bool()> s_should_stop;
 
-// Advertising
 static esp_ble_adv_params_t s_adv_params;
 
 static void init_adv_params()
@@ -149,7 +145,6 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
         esp_ble_gap_start_advertising(&s_adv_params);
         break;
 
-    // READ: app lendo valores atuais
     case ESP_GATTS_READ_EVT: {
         esp_gatt_rsp_t rsp = {};
         rsp.attr_value.handle = param->read.handle;
@@ -169,13 +164,11 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
         break;
     }
 
-    // WRITE: app enviando novos valores
     case ESP_GATTS_WRITE_EVT: {
         uint16_t handle = param->write.handle;
         uint16_t len    = param->write.len;
         uint8_t *val    = param->write.value;
 
-        // Envia resposta se necessário (write com resposta)
         if (param->write.need_rsp) {
             esp_ble_gatts_send_response(gatts_if, param->write.conn_id,
                                          param->write.trans_id, ESP_GATT_OK, nullptr);
@@ -194,7 +187,6 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
             xEventGroupSetBits(s_events, EVT_TYPE_RCVD);
         }
 
-        // Quando ambos recebidos, salva no NVS e fecha conexão
         EventBits_t bits = xEventGroupGetBits(s_events);
         if ((bits & EVT_ALL_RCVD) == EVT_ALL_RCVD && s_conn_id != 0xFFFF) {
             ESP_LOGI(TAG, "Config completa — machine='%s' type=%u",
@@ -216,7 +208,6 @@ void BleConfig::start(ConfigCallback cb, uint32_t timeout_ms, std::function<bool
     s_events   = xEventGroupCreate();
     init_adv_params();
 
-    // Carrega valores atuais do NVS
     std::string machine = Storage::get_machine_id();
     s_alert_type = Storage::get_alert_type();
     memset(s_machine_val, 0, sizeof(s_machine_val));
@@ -228,20 +219,17 @@ void BleConfig::start(ConfigCallback cb, uint32_t timeout_ms, std::function<bool
     }
     ESP_LOGI(TAG, "NVS atual: machine='%s' type=%u", machine.c_str(), s_alert_type);
 
-    // Inicializa BLE
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
     esp_bt_controller_init(&bt_cfg);
     esp_bt_controller_enable(ESP_BT_MODE_BLE);
     esp_bluedroid_init();
     esp_bluedroid_enable();
 
-    // Sem PIN — limpa bonds antigos
     esp_ble_auth_req_t auth_req = ESP_LE_AUTH_NO_BOND;
     esp_ble_gap_set_security_param(ESP_BLE_SM_AUTHEN_REQ_MODE, &auth_req, sizeof(auth_req));
     esp_ble_io_cap_t io_cap = ESP_IO_CAP_NONE;
     esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE, &io_cap, sizeof(io_cap));
 
-    // Remove todos os bonds anteriores
     int dev_num = esp_ble_get_bond_device_num();
     if (dev_num > 0) {
         esp_ble_bond_dev_t *dev_list = (esp_ble_bond_dev_t *)malloc(sizeof(esp_ble_bond_dev_t) * dev_num);
@@ -261,7 +249,6 @@ void BleConfig::start(ConfigCallback cb, uint32_t timeout_ms, std::function<bool
 
     ESP_LOGI(TAG, "Aguardando config BLE (timeout=%lus)...", (unsigned long)(timeout_ms / 1000));
 
-    // Polling curto — verifica a cada 500ms se config chegou ou se deve parar
     uint32_t elapsed = 0;
     const uint32_t poll_ms = 500;
     EventBits_t bits = 0;
@@ -272,7 +259,6 @@ void BleConfig::start(ConfigCallback cb, uint32_t timeout_ms, std::function<bool
 
         if ((bits & EVT_ALL_RCVD) == EVT_ALL_RCVD) break;
 
-        // Verifica callback de cancelamento (jumper removido, etc.)
         if (s_should_stop && s_should_stop()) {
             ESP_LOGI(TAG, "Cancelamento externo — encerrando BLE config");
             break;
