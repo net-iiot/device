@@ -1,6 +1,6 @@
 idf_component_register(
     SRCS "app.cpp"
     INCLUDE_DIRS "."
-    REQUIRES alert_runner sys storage ble_config
+    REQUIRES sys storage ble_config ble_alert
     PRIV_REQUIRES driver
 )

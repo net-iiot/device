@@ -227,14 +227,12 @@ bool BleAlert::send(const AlertData &data, uint32_t timeout_ms)
 
     esp_ble_gattc_close(s_gattc_if, s_conn_id);
     xEventGroupWaitBits(s_events, EVT_DISC, pdFALSE, pdFALSE, pdMS_TO_TICKS(3000));
-    vTaskDelay(pdMS_TO_TICKS(400));
 
 cleanup:
     esp_ble_gattc_app_unregister(0);
-    vTaskDelay(pdMS_TO_TICKS(500));
+    vTaskDelay(pdMS_TO_TICKS(200));
     esp_bluedroid_disable();
     esp_bluedroid_deinit();
-    vTaskDelay(pdMS_TO_TICKS(100));
     esp_bt_controller_disable();
     esp_bt_controller_deinit();
 
