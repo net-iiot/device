@@ -10,7 +10,7 @@
 #include "freertos/task.h"
 
 static const char *TAG   = "APP";
-static const gpio_num_t JUMPER = GPIO_NUM_33;
+static const gpio_num_t JUMPER = GPIO_NUM_25;
 
 // ─── Definição genérica de botões ────────────────────────────────────────
 struct Button {
