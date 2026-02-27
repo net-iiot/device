@@ -12,9 +12,10 @@
 
 static const char *TAG = "BLE_CFG";
 
-static const uint8_t CFG_SVC_UUID[16]      = {0x60,0x50,0x40,0x30,0x20,0x10,0x99,0x88,0xDD,0xCC,0xBB,0xAA,0x10,0x00,0x4D,0x57};
-static const uint8_t MACHINE_CHAR_UUID[16] = {0x60,0x50,0x40,0x30,0x20,0x10,0x99,0x88,0xDD,0xCC,0xBB,0xAA,0x11,0x00,0x4D,0x57};
-static const uint8_t TYPE_CHAR_UUID[16]    = {0x60,0x50,0x40,0x30,0x20,0x10,0x99,0x88,0xDD,0xCC,0xBB,0xAA,0x12,0x00,0x4D,0x57};
+static const uint8_t CFG_SVC_UUID[16]        = {0x60,0x50,0x40,0x30,0x20,0x10,0x99,0x88,0xDD,0xCC,0xBB,0xAA,0x10,0x00,0x4D,0x57};
+static const uint8_t MACHINE_CHAR_UUID[16]   = {0x60,0x50,0x40,0x30,0x20,0x10,0x99,0x88,0xDD,0xCC,0xBB,0xAA,0x11,0x00,0x4D,0x57};
+static const uint8_t TYPE_CHAR_UUID[16]      = {0x60,0x50,0x40,0x30,0x20,0x10,0x99,0x88,0xDD,0xCC,0xBB,0xAA,0x12,0x00,0x4D,0x57};
+static const uint8_t BUTTON_COUNT_CHAR_UUID[16] = {0x60,0x50,0x40,0x30,0x20,0x10,0x99,0x88,0xDD,0xCC,0xBB,0xAA,0x13,0x00,0x4D,0x57};
 
 enum AttrIdx {
     IDX_SVC,
@@ -22,6 +23,8 @@ enum AttrIdx {
     IDX_MACHINE_VAL,
     IDX_TYPE_DECL,
     IDX_TYPE_VAL,
+    IDX_BUTTON_COUNT_DECL,
+    IDX_BUTTON_COUNT_VAL,
     IDX_COUNT
 };
 
@@ -31,7 +34,8 @@ static const uint8_t  PROP_RW          = ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_
 
 static char    s_machine_val[32] = {};
 static uint16_t s_machine_val_len = 0;
-static uint8_t  s_alert_type = 0;
+static uint8_t  s_alert_types[10] = {};  // Array para até 10 botões
+static size_t   s_button_count = 0;
 
 static const esp_gatts_attr_db_t s_attr_table[IDX_COUNT] = {
     [IDX_SVC] = {
@@ -59,13 +63,24 @@ static const esp_gatts_attr_db_t s_attr_table[IDX_COUNT] = {
         {ESP_GATT_RSP_BY_APP},
         {ESP_UUID_LEN_128, (uint8_t *)TYPE_CHAR_UUID,
          ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
+         10, 0, nullptr}},  // Array para até 10 botões
+
+    [IDX_BUTTON_COUNT_DECL] = {
+        {ESP_GATT_AUTO_RSP},
+        {ESP_UUID_LEN_16, (uint8_t *)&CHAR_DECLARE_UUID, ESP_GATT_PERM_READ,
+         sizeof(PROP_RW), sizeof(PROP_RW), (uint8_t *)&PROP_RW}},
+
+    [IDX_BUTTON_COUNT_VAL] = {
+        {ESP_GATT_RSP_BY_APP},
+        {ESP_UUID_LEN_128, (uint8_t *)BUTTON_COUNT_CHAR_UUID,
+         ESP_GATT_PERM_READ,
          1, 0, nullptr}},
 };
 
 static EventGroupHandle_t s_events;
 static const int EVT_MACHINE_RCVD = BIT0;
 static const int EVT_TYPE_RCVD    = BIT1;
-static const int EVT_ALL_RCVD     = EVT_MACHINE_RCVD | EVT_TYPE_RCVD;
+static const int EVT_ALL_RCVD     = EVT_MACHINE_RCVD | EVT_TYPE_RCVD;  // Configuração completa quando ambos são recebidos
 
 static uint16_t s_handle_table[IDX_COUNT] = {};
 static uint16_t s_gatts_if  = ESP_GATT_IF_NONE;
@@ -154,9 +169,13 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
             memcpy(rsp.attr_value.value, s_machine_val, s_machine_val_len);
             ESP_LOGI(TAG, "READ machine_id: '%.*s'", s_machine_val_len, s_machine_val);
         } else if (param->read.handle == s_handle_table[IDX_TYPE_VAL]) {
+            rsp.attr_value.len = s_button_count;
+            memcpy(rsp.attr_value.value, s_alert_types, s_button_count);
+            ESP_LOGI(TAG, "READ alert_types: %d bytes", s_button_count);
+        } else if (param->read.handle == s_handle_table[IDX_BUTTON_COUNT_VAL]) {
             rsp.attr_value.len = 1;
-            rsp.attr_value.value[0] = s_alert_type;
-            ESP_LOGI(TAG, "READ alert_type: %u", s_alert_type);
+            rsp.attr_value.value[0] = s_button_count;
+            ESP_LOGI(TAG, "READ button_count: %d", s_button_count);
         }
 
         esp_ble_gatts_send_response(gatts_if, param->read.conn_id,
@@ -181,16 +200,23 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
             s_machine_val_len = len;
             ESP_LOGI(TAG, "WRITE machine_id: '%.*s'", len, (char *)val);
             xEventGroupSetBits(s_events, EVT_MACHINE_RCVD);
-        } else if (handle == s_handle_table[IDX_TYPE_VAL] && len >= 1) {
-            s_alert_type = val[0];
-            ESP_LOGI(TAG, "WRITE alert_type: %u", s_alert_type);
+        } else if (handle == s_handle_table[IDX_TYPE_VAL] && len > 0) {
+            // Recebe array de types (um para cada botão)
+            if (len > sizeof(s_alert_types)) len = sizeof(s_alert_types);
+            memset(s_alert_types, 0, sizeof(s_alert_types));
+            memcpy(s_alert_types, val, len);
+            s_button_count = len;
+            ESP_LOGI(TAG, "WRITE alert_types: %d botões", s_button_count);
+            for (size_t i = 0; i < s_button_count; i++) {
+                ESP_LOGI(TAG, "  Botão %d → type %u", i + 1, s_alert_types[i]);
+            }
             xEventGroupSetBits(s_events, EVT_TYPE_RCVD);
         }
 
         EventBits_t bits = xEventGroupGetBits(s_events);
         if ((bits & EVT_ALL_RCVD) == EVT_ALL_RCVD && s_conn_id != 0xFFFF) {
-            ESP_LOGI(TAG, "Config completa — machine='%s' type=%u",
-                     s_machine_val, s_alert_type);
+            ESP_LOGI(TAG, "Config completa — machine='%s' types=%d",
+                     s_machine_val, s_button_count);
             esp_ble_gatts_close(gatts_if, s_conn_id);
         }
         break;
@@ -209,7 +235,6 @@ void BleConfig::start(ConfigCallback cb, uint32_t timeout_ms, std::function<bool
     init_adv_params();
 
     std::string machine = Storage::get_machine_id();
-    s_alert_type = Storage::get_alert_type();
     memset(s_machine_val, 0, sizeof(s_machine_val));
     if (!machine.empty()) {
         size_t len = machine.size();
@@ -217,7 +242,18 @@ void BleConfig::start(ConfigCallback cb, uint32_t timeout_ms, std::function<bool
         memcpy(s_machine_val, machine.c_str(), len);
         s_machine_val_len = len;
     }
-    ESP_LOGI(TAG, "NVS atual: machine='%s' type=%u", machine.c_str(), s_alert_type);
+
+    // Carrega types dos botões da NVS
+    s_button_count = 0;
+    // Assumindo máximo de 10 botões (definido em BUTTONS_CONFIG)
+    for (int i = 1; i <= 10; i++) {
+        uint8_t type = Storage::get_button_alert_type(i);
+        if (type > 0 || i <= 2) {  // Pelo menos 2 botões
+            s_alert_types[s_button_count++] = type;
+        }
+    }
+
+    ESP_LOGI(TAG, "NVS atual: machine='%s' botões=%d", machine.c_str(), s_button_count);
 
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
     esp_bt_controller_init(&bt_cfg);
@@ -271,7 +307,8 @@ void BleConfig::start(ConfigCallback cb, uint32_t timeout_ms, std::function<bool
         ESP_LOGI(TAG, "Configuração salva com sucesso");
         if (s_callback) {
             std::string m(s_machine_val, s_machine_val_len);
-            s_callback({m, s_alert_type});
+            std::vector<uint8_t> types(s_alert_types, s_alert_types + s_button_count);
+            s_callback({m, types});
         }
     } else {
         ESP_LOGW(TAG, "Config encerrada sem receber dados");
