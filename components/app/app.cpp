@@ -56,9 +56,13 @@ void App::run()
         ESP_LOGI(TAG, "Boot inicial — aguardando botão para acordar");
         // Espera soltar o botão se estiver pressionado (evita wake imediato)
         config_btn_input();
+        int btn_level = gpio_get_level(BTN);
+        ESP_LOGI(TAG, "DEBUG BOOT: Nível inicial BTN = %d", btn_level);
         while (gpio_get_level(BTN) == 0) {
-            vTaskDelay(pdMS_TO_TICKS(50));
+            ESP_LOGI(TAG, "DEBUG: BTN ainda LOW, aguardando...");
+            vTaskDelay(pdMS_TO_TICKS(100));
         }
+        ESP_LOGI(TAG, "DEBUG: BTN agora HIGH, entrando em sleep");
         vTaskDelay(pdMS_TO_TICKS(100));
         Sys::go_deep_sleep(BTN);
         return;
@@ -67,7 +71,9 @@ void App::run()
     // Confirma que o botão está realmente pressionado
     config_btn_input();
     vTaskDelay(pdMS_TO_TICKS(50));
-    if (gpio_get_level(BTN) != 0) {
+    int btn_level = gpio_get_level(BTN);
+    ESP_LOGI(TAG, "DEBUG: Nível do BTN = %d (0=LOW, 1=HIGH)", btn_level);
+    if (btn_level != 0) {
         ESP_LOGI(TAG, "Wakeup espúrio — botão não está pressionado, voltando a dormir");
         Sys::go_deep_sleep(BTN);
         return;
