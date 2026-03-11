@@ -10,7 +10,7 @@
 #include "freertos/task.h"
 
 static const char *TAG   = "APP";
-static const gpio_num_t JUMPER = GPIO_NUM_25;
+static const gpio_num_t JUMPER = GPIO_NUM_33;
 
 // ─── Definição genérica de botões ────────────────────────────────────────
 struct Button {
@@ -21,7 +21,7 @@ struct Button {
 
 static const Button BUTTONS_CONFIG[] = {
     {GPIO_NUM_32, 1, 0},  // Botão 1 (type será carregado da NVS)
-    //{GPIO_NUM_26, 2, 0},  // Botão 2 (type será carregado da NVS)''''''''''''''''''''''
+    //{GPIO_NUM_26, 2, 0},  // Botão 2 (type será carregado da NVS)
     // {GPIO_NUM_36, 3, 0},  // Botão 3 (type será carregado da NVS)
 };
 
@@ -62,7 +62,7 @@ static void config_buttons_input()
     gpio_config_t btn_cfg = {};
     btn_cfg.pin_bit_mask = pin_mask;
     btn_cfg.mode         = GPIO_MODE_INPUT;
-    btn_cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
+    btn_cfg.pull_up_en   = GPIO_PULLUP_ENABLE; //Disable pra usar resistor externo
     btn_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
     btn_cfg.intr_type    = GPIO_INTR_DISABLE;
     gpio_config(&btn_cfg);

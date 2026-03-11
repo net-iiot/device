@@ -1,6 +1,6 @@
 # device-alert
 
-Firmware ESP32 para dispositivo de alerta por botão. Acorda por GPIO, envia evento via BLE para um node da mesh e volta a deep sleep.
+Firmware ESP32 para dispositivo de alerta por botão. Acorda por GPIO, envia evento via BLE para um node da mesh e volta a deep sleep 
 
 ## Requisitos
 
@@ -18,6 +18,8 @@ Firmware ESP32 para dispositivo de alerta por botão. Acorda por GPIO, envia eve
 
 1. **Configuração**: jumper em GPIO 33 para GND. App BLE "WM Alert Config" envia `machine_id` e `alert_type`. Remover jumper para sair.
 2. **Alerta**: acordar com o botão (GPIO 32). Segurar 3 s ou gesto válido para enviar alerta. 5 cliques rápidos abre modo configuração.
+
+GPIO_PULLUP_ENABLE na devboard e disable na oee
 
 ## Build
 
