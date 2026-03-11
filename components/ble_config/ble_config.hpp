@@ -2,13 +2,14 @@
 #include <string>
 #include <functional>
 #include <cstdint>
+#include <vector>
 
 namespace BleConfig
 {
     struct ConfigData
     {
         std::string machine_id;
-        uint8_t     alert_type;
+        std::vector<uint8_t> alert_types;  // Array de types (um por botão)
     };
 
     using ConfigCallback = std::function<void(ConfigData)>;
