@@ -9,9 +9,14 @@ static const char *TAG = "SYS";
 
 void Sys::go_deep_sleep(gpio_num_t wake_btn_pin)
 {
-    ESP_LOGI(TAG, "Entrando em deep sleep...");
+    go_deep_sleep(1ULL << wake_btn_pin);
+}
+
+void Sys::go_deep_sleep(uint64_t wake_pin_mask)
+{
+    ESP_LOGI(TAG, "Entrando em deep sleep com máscara: 0x%llx", wake_pin_mask);
     vTaskDelay(pdMS_TO_TICKS(100));
-    esp_sleep_enable_ext0_wakeup(wake_btn_pin, 0);
+    esp_sleep_enable_ext1_wakeup(wake_pin_mask, (esp_sleep_ext1_wakeup_mode_t)1);  // 1 = ANY_LOW
     esp_deep_sleep_start();
 }
 

@@ -7,8 +7,16 @@
 static const char *TAG = "STORAGE";
 static const char *NVS_NS    = "wetzel_alert";
 static const char *KEY_MACH  = "machine_id";
-static const char *KEY_TYPE  = "alert_type";
+static const char *KEY_TYPE  = "alert_type";  // Legacy
 static const char *KEY_CFG   = "configured";
+
+// Gera chave dinâmica para alert_type de um botão específico
+static std::string get_button_type_key(int button_id)
+{
+    char buf[32];
+    snprintf(buf, sizeof(buf), "btn_%d_type", button_id);
+    return std::string(buf);
+}
 
 bool Storage::init()
 {
@@ -70,6 +78,62 @@ uint8_t Storage::get_alert_type()
 
     uint8_t t = 0;
     nvs_get_u8(h, KEY_TYPE, &t);
+    nvs_close(h);
+    return t;
+}
+
+bool Storage::save_config_with_buttons(const std::string &machine_id, const uint8_t *alert_types, size_t count)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Erro ao abrir NVS: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    nvs_set_str(h, KEY_MACH, machine_id.c_str());
+
+    // Grava type de cada botão
+    for (size_t i = 0; i < count; i++) {
+        std::string key = get_button_type_key(i + 1);  // button_id começa em 1
+        nvs_set_u8(h, key.c_str(), alert_types[i]);
+        ESP_LOGI(TAG, "Salvando button %d: type=%u", i + 1, alert_types[i]);
+    }
+
+    nvs_set_u8(h, KEY_CFG, 1);
+    err = nvs_commit(h);
+    nvs_close(h);
+
+    ESP_LOGI(TAG, "Config com %d botões salva", count);
+    return err == ESP_OK;
+}
+
+bool Storage::save_button_alert_type(int button_id, uint8_t alert_type)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Erro ao abrir NVS: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    std::string key = get_button_type_key(button_id);
+    nvs_set_u8(h, key.c_str(), alert_type);
+    err = nvs_commit(h);
+    nvs_close(h);
+
+    ESP_LOGI(TAG, "Button %d type atualizado: %u", button_id, alert_type);
+    return err == ESP_OK;
+}
+
+uint8_t Storage::get_button_alert_type(int button_id)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return 0;
+
+    std::string key = get_button_type_key(button_id);
+    uint8_t t = 0;
+    nvs_get_u8(h, key.c_str(), &t);
     nvs_close(h);
     return t;
 }
