@@ -20,8 +20,8 @@ struct Button {
 };
 
 static const Button BUTTONS_CONFIG[] = {
-    {GPIO_NUM_34, 1, 0},  // Botão 1 (type será carregado da NVS)
-    {GPIO_NUM_26, 2, 0},  // Botão 2 (type será carregado da NVS)''''''''''''''''''''''
+    {GPIO_NUM_32, 1, 0},  // Botão 1 (type será carregado da NVS)
+    //{GPIO_NUM_26, 2, 0},  // Botão 2 (type será carregado da NVS)''''''''''''''''''''''
     // {GPIO_NUM_36, 3, 0},  // Botão 3 (type será carregado da NVS)
 };
 
