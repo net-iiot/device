@@ -14,81 +14,74 @@ Firmware ESP32 para dispositivo de alerta por botão. Acorda por GPIO, envia eve
 | GPIO 32 | Botão de alerta |
 | GPIO 33 | Jumper de config (LOW = modo configuração) |
 
-### 🎯 Configuração Eletrônica (Placa Atual - Flash 4MB)
+### 🔧 Escolha do tipo de placa (obrigatório)
 
-**Especificações**:
-- Microcontrolador: ESP32
-- Flash: 4MB
-- Pull-ups: **HABILITADOS** (interno do ESP32)
+O firmware suporta dois tipos de placa. **Sempre defina qual placa está usando** em:
 
-**Mapa de GPIOs Detalhado**:
-| Pino | Função | Configuração | Estado Repouso |
-|------|--------|--------------|-----------------|
-| GPIO_32 | Botão de Alerta | Input + Pull-up | HIGH (não pressionado) |
-| GPIO_33 | Jumper Configuração | Input + Pull-up | HIGH (não ativo) |
+**Arquivo:** `components/app/board_config.h`
 
-### 📋 Alterações Recentes (11 Mar 2026)
+| Placa | Define | Wake | Pull-up botões | Espera botão soltar |
+|-------|--------|------|-----------------|---------------------|
+| **4MB** (1 botão, flash) | `BOARD_4MB_SINGLE_BUTTON` | EXT0 (GPIO botão) | Interno (ENABLE) | Sem timeout (aguarda HIGH) |
+| **8MB OEE** (vários botões) | `BOARD_8MB_MULTI_BUTTON` | EXT1 (máscara) | Externo (DISABLE) | 3000 ms |
 
-**Fix: GPIO Pull-up Enable**
+No `board_config.h`, deixe **uma** linha ativa e a outra comentada, por exemplo para 4MB:
 
-❌ **Problema Original**: Wakeups fantasma contínuos (acordava sozinho)
-- **Causa**: GPIO_32 sem pull-up → pino flutuava → EXT0 interpretava como "botão pressionado"
-
-✅ **Solução Implementada**:
-```cpp
-// ANTES (causava problema)
-btn_cfg.pull_up_en = GPIO_PULLUP_DISABLE;
-
-// AGORA (corrigido)
-btn_cfg.pull_up_en = GPIO_PULLUP_ENABLE;
+```c
+#define BOARD_4MB_SINGLE_BUTTON  1
+/* #define BOARD_8MB_MULTI_BUTTON  1 */
 ```
 
-**Arquivos Modificados**:
-1. `components/app/app.cpp` - Linha 21: Habilitado pull-up do botão
-2. `components/sys/sys.cpp` - Linhas 14, 23: Configuração de EXT0 wakeup e pull-up do jumper
+Para 8MB OEE:
 
-### 🚀 Adaptação para Outra Placa
+```c
+/* #define BOARD_4MB_SINGLE_BUTTON  1 */
+#define BOARD_8MB_MULTI_BUTTON  1
+```
 
-**Se mudar de placa, modifique**:
+---
 
-1. **GPIO do botão** (`components/app/app.cpp` - Linha 13):
-   ```cpp
-   static const gpio_num_t BTN = GPIO_NUM_XX;  // Seu pino aqui
-   ```
+### 🎯 Placa 4MB (um botão, flash)
 
-2. **GPIO do jumper** (`components/app/app.cpp` - Linha 14):
-   ```cpp
-   static const gpio_num_t JUMPER = GPIO_NUM_YY;  // Seu pino aqui
-   ```
+- **Flash:** 4MB  
+- **Botão:** 1 (ex.: GPIO 32), pull-up **interno** do ESP32.  
+- **Wake:** **EXT0** no pino do botão (LOW).  
+- **Comportamento:** igual à `main` antiga funcional: no boot espera o botão ficar em HIGH, entra em deep sleep e só acorda quando o botão é pressionado.  
+- **Jumper:** GPIO 33 não é usado na 4MB.
 
-3. **Se o botão usar pull-down** (ao invés de pull-up):
-   ```cpp
-   // components/app/app.cpp - Linhas 21-22
-   btn_cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
-   btn_cfg.pull_down_en = GPIO_PULLDOWN_ENABLE;
+### 🎯 Placa 8MB OEE (vários botões)
 
-   // components/sys/sys.cpp - Linha 14
-   esp_sleep_enable_ext0_wakeup(wake_btn_pin, 1);  // 1 = HIGH trigger
-   ```
+- **Flash:** 8MB  
+- **Botões:** Vários, **sem** pull-up no hardware (resistor externo). No código o pull-up fica **desabilitado**.  
+- **Comportamento:** Após enviar o alerta, o firmware espera até **3000 ms** por todos os botões serem soltos.  
+- **Compatível com:** comportamento da branch `dev_oee` (pull-up disable, wait completo).
+
+### Mapa de GPIOs (comum)
+
+| Pino    | Função            | Configuração   | Estado repouso      |
+|---------|-------------------|----------------|---------------------|
+| GPIO_32 | Botão de alerta   | Input + conf. conforme placa | Conforme pull-up   |
+| GPIO_33 | Jumper configuração | Input + Pull-up | HIGH (não ativo)  |
+
+### Onde mudar no código (resumo)
+
+| O que mudar | Arquivo | O que fazer |
+|-------------|---------|-------------|
+| **Tipo de placa (4MB vs 8MB OEE)** | `components/app/board_config.h` | Ativar só `BOARD_4MB_SINGLE_BUTTON` ou `BOARD_8MB_MULTI_BUTTON` |
+| **GPIO do(s) botão(ões)** | `components/app/app.cpp` | Array `BUTTONS_CONFIG[]` (pinos e IDs) |
+| **GPIO do jumper** | `components/app/app.cpp` | Constante `JUMPER` |
+| **Pull-up do jumper** | `components/sys/sys.cpp` | `cfg.pull_up_en` em `is_config_jumper_active` (se sua placa exigir) |
 
 **Referência rápida**:
-| Cenário | Pull-up | Pull-down | EXT0 |
-|---------|---------|----------|------|
-| Placa atual (4MB) | ENABLE | DISABLE | 0 (LOW) |
-| Com resistor externo | ENABLE | DISABLE | 0 (LOW) |
-| Com pull-down | DISABLE | ENABLE | 1 (HIGH) |
-
-**⚡ Dicas para outra placa**:
-- Sempre verificar os logs `DEBUG BOOT: Nível inicial BTN = ?` durante testes
-- Se houver wakeups fantasma: aumentar resistor pull-up (22kΩ) ou adicionar capacitor 0.1µF
-- Se o botão não acordar: verificar trigger do EXT0 (0 ou 1) ou tentar EXT1 para múltiplos pinos
+| Cenário        | Wake | Pull-up botão | Timeout wait release |
+|----------------|------|---------------|----------------------|
+| Placa 4MB      | EXT0 | ENABLE        | Sem timeout          |
+| Placa 8MB OEE  | EXT1 | DISABLE       | 3000 ms              |
 
 ## Uso
 
 1. **Configuração**: jumper em GPIO 33 para GND. App BLE "WM Alert Config" envia `machine_id` e `alert_type`. Remover jumper para sair.
 2. **Alerta**: acordar com o botão (GPIO 32). Segurar 3 s ou gesto válido para enviar alerta. 5 cliques rápidos abre modo configuração.
-
-GPIO_PULLUP_ENABLE na devboard e disable na oee
 
 ## Build
 

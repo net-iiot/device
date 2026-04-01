@@ -1,4 +1,5 @@
 #include "app.hpp"
+#include "board_config.h"
 #include "sys.hpp"
 #include "storage.hpp"
 #include "ble_config.hpp"
@@ -62,7 +63,11 @@ static void config_buttons_input()
     gpio_config_t btn_cfg = {};
     btn_cfg.pin_bit_mask = pin_mask;
     btn_cfg.mode         = GPIO_MODE_INPUT;
-    btn_cfg.pull_up_en   = GPIO_PULLUP_ENABLE; //Disable pra usar resistor externo
+#if defined(BOARD_4MB_SINGLE_BUTTON)
+    btn_cfg.pull_up_en   = GPIO_PULLUP_ENABLE;   /* Placa 4MB: pull-up interno */
+#else
+    btn_cfg.pull_up_en   = GPIO_PULLUP_DISABLE;  /* Placa 8MB OEE: resistor externo */
+#endif
     btn_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
     btn_cfg.intr_type    = GPIO_INTR_DISABLE;
     gpio_config(&btn_cfg);
@@ -86,10 +91,14 @@ static const Button* get_button(int index)
     return &BUTTONS[index];
 }
 
-// Aguarda todos os botões serem soltos (com timeout de 3 segundos)
+// Aguarda todos os botões serem soltos (timeout: 4MB=500ms, 8MB OEE=3000ms)
 static void wait_all_buttons_release()
 {
-    uint32_t timeout_ms = 3000;
+#if defined(BOARD_4MB_SINGLE_BUTTON)
+    uint32_t timeout_ms = 500;   /* Placa 4MB: timeout curto para não travar (pino pode flutuar) */
+#else
+    uint32_t timeout_ms = 3000;  /* Placa 8MB OEE: aguarda todos os botões soltos */
+#endif
     uint32_t elapsed = 0;
 
     ESP_LOGI(TAG, "Aguardando botões serem soltos...");
@@ -100,7 +109,7 @@ static void wait_all_buttons_release()
             int level = gpio_get_level(BUTTONS[i].pin);
             if (level == 0) {
                 any_pressed = true;
-                ESP_LOGI(TAG, "  Botão %d (GPIO %d) ainda pressionado", i, BUTTONS[i].pin);
+                ESP_LOGI(TAG, "  Botão %d (GPIO %d) ainda pressionado (nível=%d)", i, BUTTONS[i].pin, level);
             }
         }
         if (!any_pressed) {
@@ -112,24 +121,72 @@ static void wait_all_buttons_release()
         elapsed += 50;
     }
 
+    // DEBUG: mostrar nível final dos GPIOs após timeout
     ESP_LOGW(TAG, "Timeout aguardando botões serem soltos após %d ms", timeout_ms);
+    for (size_t i = 0; i < NUM_BUTTONS; i++) {
+        int level = gpio_get_level(BUTTONS[i].pin);
+        ESP_LOGI(TAG, "  [DEBUG] Botão %d (GPIO %d): nível=%d (0=LOW/pressionado, 1=HIGH/solto)",
+                 i, BUTTONS[i].pin, level);
+    }
 }
 
 void App::run()
 {
-    // Carrega tipos de alerta dos botões da NVS
+#if defined(BOARD_4MB_SINGLE_BUTTON)
+    // Fluxo 4MB (baseado na main antiga funcional): EXT0 + único botão.
+    const gpio_num_t btn_pin = BUTTONS_CONFIG[0].pin;
+    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+
+    if (cause != ESP_SLEEP_WAKEUP_EXT0) {
+        config_buttons_input();
+        while (gpio_get_level(btn_pin) == 0) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+        Sys::go_deep_sleep(btn_pin);
+        return;
+    }
+
+    // EXT0 já confirmou wake por botão. Não exigir nível LOW aqui, pois clique curto
+    // pode voltar a HIGH antes do app iniciar.
+    config_buttons_input();
+    vTaskDelay(pdMS_TO_TICKS(30));
+
+    if (!Storage::is_configured()) {
+        Sys::go_deep_sleep(btn_pin);
+        return;
+    }
+
+    uint8_t alert_type = Storage::get_button_alert_type(1);
+    if (alert_type == 0) {
+        // Compatibilidade com config antiga (chave legacy `alert_type`)
+        alert_type = Storage::get_alert_type();
+    }
+
+    BleAlert::AlertData alert = {
+        .machine_id = Storage::get_machine_id(),
+        .alert_type = alert_type,
+    };
+    (void)BleAlert::send(alert);
+
+    while (gpio_get_level(btn_pin) == 0) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
+    Sys::go_deep_sleep(btn_pin);
+    return;
+#else
+    // Fluxo 8MB OEE (EXT1 + múltiplos botões + jumper de configuração).
+    ESP_LOGI(TAG, "Board: 8MB OEE multi-button (sem pull-up, timeout 3s)");
     load_buttons_from_nvs();
 
-    // ── Jumper ativo → modo configuração (loop até remover jumper) ───────────
     if (Sys::is_config_jumper_active(JUMPER)) {
         ESP_LOGI(TAG, "═══════════════════════════════════════════════════════");
         ESP_LOGI(TAG, ">> MODO CONFIGURAÇÃO (jumper ativo) <<");
         ESP_LOGI(TAG, "═══════════════════════════════════════════════════════");
-
         while (Sys::is_config_jumper_active(JUMPER)) {
             BleConfig::start(
                 [](BleConfig::ConfigData data) {
-                    // Salva machine_id e múltiplos alert_types
                     Storage::save_config_with_buttons(data.machine_id, data.alert_types.data(), data.alert_types.size());
                     ESP_LOGI("APP", "Config salva: machine=%s com %d botões",
                              data.machine_id.c_str(), data.alert_types.size());
@@ -138,57 +195,40 @@ void App::run()
                 []() -> bool { return !Sys::is_config_jumper_active(JUMPER); }
             );
         }
-
-        ESP_LOGI(TAG, "Jumper removido — saindo do modo configuração");
         Sys::go_deep_sleep(get_wake_mask());
         return;
     }
 
-    // ── Modo normal — botão = alerta ─────────────────────────────────────────
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-
     if (cause != ESP_SLEEP_WAKEUP_EXT1) {
-        ESP_LOGI(TAG, "Boot inicial — aguardando botão para acordar");
-        ESP_LOGI(TAG, "Número de botões: %d", NUM_BUTTONS);
-        for (size_t i = 0; i < NUM_BUTTONS; i++) {
-            ESP_LOGI(TAG, "  Botão %d: GPIO=%d, ID=%d", i, BUTTONS[i].pin, BUTTONS[i].id);
-        }
-        // Configura os GPIOs
         config_buttons_input();
-        ESP_LOGI(TAG, "GPIOs configurados como entrada");
-        vTaskDelay(pdMS_TO_TICKS(100));  // Pequeno delay para estabilizar leitura
-        ESP_LOGI(TAG, "Entrando em deep sleep");
+        vTaskDelay(pdMS_TO_TICKS(100));
         Sys::go_deep_sleep(get_wake_mask());
         return;
     }
 
-    // Detecta qual botão foi pressionado
+    config_buttons_input();
+    vTaskDelay(pdMS_TO_TICKS(50));
     int btn_idx = detect_pressed_button_index();
     if (btn_idx == -1) {
-        ESP_LOGI(TAG, "Wakeup espúrio — nenhum botão pressionado");
         Sys::go_deep_sleep(get_wake_mask());
         return;
     }
 
     const Button* btn = get_button(btn_idx);
-    ESP_LOGI(TAG, ">> DISPARO DE ALERTA - Botão %d (type %d) <<", btn->id, btn->alert_type);
-
     if (!Storage::is_configured()) {
-        ESP_LOGW(TAG, "Dispositivo não configurado — ignorando disparo");
         Sys::go_deep_sleep(get_wake_mask());
         return;
     }
 
     BleAlert::AlertData alert = {
         .machine_id = Storage::get_machine_id(),
-        .alert_type = btn->alert_type,  // Tipo específico do botão
+        .alert_type = btn->alert_type,
     };
+    (void)BleAlert::send(alert);
 
-    bool ok = BleAlert::send(alert);
-    ESP_LOGI(TAG, "Alerta %s", ok ? "enviado" : "FALHOU");
-
-    // Aguarda todos os botões serem soltos (evita múltiplos disparos)
     wait_all_buttons_release();
-
     Sys::go_deep_sleep(get_wake_mask());
+    return;
+#endif
 }

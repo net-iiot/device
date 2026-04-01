@@ -1,5 +1,5 @@
-# Stack da task principal (precisa de espaço extra para BLE)
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# Stack da task principal (precisa de espaço extra para BLE e 4MB)
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288
 
 # Log
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
